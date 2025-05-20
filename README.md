@@ -1,1 +1,3 @@
-# American-Asian-and-European-options-pricing-with-variance-reduction-techniques
+# Monte-Carlo-method-with-variance-reduction-techniques
+
+This project is final project of IE522 Statistical methods in finance. In this project, we explored pricing of American, Asian and European options implementing Monte Carlo methods with variance reduction techniques including moment matching, antithetic variables and Richardson Extrapolation. I was the main contributor of coding part.
