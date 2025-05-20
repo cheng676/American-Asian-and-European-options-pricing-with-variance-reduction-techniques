@@ -1,0 +1,261 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+# 1 European Vanilla Put Option Pricing
+
+In this part, we use Monte Carlo methods to price European vanilla put options. Both the “standard Monte Carlo method” and the “Antithetic Variates method” are implemented and compared. Monte Carlo methods rely on random sampling and statistical analysis, making them well-suited for solving financial problems involving randomness or complex integrals. This report provides detailed descriptions of the methods, experimental results, and comparative analysis.
+
+## 1.1 Pricing Model
+
+Assume the underlying asset price follows the Black-Scholes-Merton model:
+
+$$
+S_t = S_0 \exp\left( \left( r - q - \frac{1}{2} \sigma^2 \right)t + \sigma B_t \right), \quad 0 \leq t \leq T.
+$$
+
+The price of the European put option is given by:
+
+$$
+p = e^{-rT} \mathbb{E} \left[ \max(0, K - S_T) \right].
+$$
+
+where:
+
+\- $S_0$: Initial asset price
+
+\- $r$: Risk-free interest rate (continuous compounding, annualized);
+
+\- $q$: Continuous dividend yield of the underlying asset;
+
+\- σ: Annualized volatility of the underlying asset;
+
+\- $B_t$: Standard Brownian motion;
+
+\- $K$: Strike price;
+
+\- $T$: Option maturity time;
+
+## 1.2 Standard Monte Carlo Method
+
+The Standard Monte Carlo Method estimates the price of a European Vanilla Put Option by averaging the discounted payoffs from multiple simulated asset price paths.
+
+### 1.2.1 Code and Results
+
+Import packages
+
+```{r setup, include=FALSE}
+library(ggplot2)
+library(tictoc)
+```
+
+The code calculates the theoretical price of a European put option using the **Black-Scholes-Merton model** and estimates the price using **Monte Carlo simulation** for varying sample sizes (N), comparing results in terms of price, standard error, confidence intervals, and absolute pricing error relative to the exact BSM price.
+
+```{r}
+# BSM European Put Option
+BS_put_price = function(S, K, T, r, q, vol) {
+  d1 = (log(S / K) + (r - q + 0.5 * vol^2) * T) / (vol * sqrt(T))
+  d2 = d1 - vol * sqrt(T)
+  p = K * exp(-r * T) * pnorm(-d2) - S * exp(-q* T) * pnorm(-d1)
+  return(p)
+}
+
+# MC
+MC_put_price = function(S, K, T, r, q, vol, N) {
+  set.seed(123) # Set seed for reproducibility
+  Z = rnorm(N)
+  ST = S * exp((r - q - 0.5 * vol^2) * T + vol * sqrt(T) * Z)
+  payoff = pmax(K - ST, 0)
+  price = mean(payoff) * exp(-r * T)
+  se = sd(payoff) * exp(-r * T) / sqrt(N)
+  lower_ci = price - 1.96 * se
+  upper_ci = price + 1.96 * se
+  return(list(price = price, se = se, ci = c(lower_ci, upper_ci)))
+}
+
+#Given
+S = 100
+K = 100
+T = 0.5
+r = 0.04
+q = 0.02
+vol = 0.2
+
+
+# BS price
+exact_price = BS_put_price(S, K, T, r, q, vol)
+# MC with diff sample sizes
+sample_sizes = c(10,100,1000,2500,5000, 10000, 50000, 100000, 100000)
+results = data.frame(N = sample_sizes, Price = numeric(length(sample_sizes)),
+SE = numeric(length(sample_sizes)),
+LowerCI = numeric(length(sample_sizes)),
+UpperCI = numeric(length(sample_sizes)),
+AbsolutePricingError = numeric(length(sample_sizes)))
+for (i in 1:length(sample_sizes)) {
+N = sample_sizes[i]
+start_time = Sys.time()
+res = MC_put_price(S, K, T, r, q, vol, N)
+end_time = Sys.time()
+results$Price[i] = res$price
+results$SE[i] = res$se
+results$LowerCI[i] = res$ci[1]
+results$UpperCI[i] = res$ci[2]
+results$AbsolutePricingError[i] = abs(res$price - exact_price)
+results$Time[i] = as.numeric(difftime(end_time, start_time, units = "secs"))
+}
+print(results)
+```
+
+The results of the **standard Monte Carlo method** for different sample sizes N are summarized.
+
+As the sample size N increases, the Monte Carlo estimates converge to the theoretical value **5.0698**.
+
+Visualize the convergence of Monte Carlo simulation estimates for a European put option price as the sample size increases
+
+```{r}
+ggplot(results, aes(x = N, y = Price)) +
+  geom_line() +
+  geom_point() +
+  geom_hline(yintercept = exact_price, linetype = "dashed", color ="pink") +
+  theme_minimal() +
+labs(title = "Monte Carlo Estimate Convergence with Increasing Sample Size",
+x = "Sample Size", y = "Estimated Option Price")
+```
+
+## 1.3 Antithetic Method (Antithetic Variates method)
+
+The Antithetic Variates Method improves the efficiency of Monte Carlo simulations by reducing variance, using both a random variable Z and -Z to generate paired asset price paths, and averaging their discounted payoffs.
+
+### 1.3.1 Introduction of Antithetic Variates method
+
+**Asset Price Paths** (Using Z and −Z):
+
+$$
+S_T^1 = S_0 \exp \left( \left( r - q - \frac{1}{2} \sigma^2 \right) T + \sigma \sqrt{T} Z \right),
+$$ 
+$$
+S_T^2 = S_0 \exp \left( \left( r - q - \frac{1}{2} \sigma^2 \right) T + \sigma \sqrt{T} (-Z) \right).
+$$
+
+**Discounted Payoffs**
+
+$$
+X_1 = e^{-rT} \max(0, K - S_T^1), \quad X_2 = e^{-rT} \max(0, K - S_T^2).
+$$
+
+**Antithetic Variates Estimator**
+
+$$
+\hat{X} = \frac{X_1 + X_2}{2}.
+$$
+
+**Advantages of the Antithetic Variates Method**
+
+1.  **Variance Reduction**: By introducing negative correlation between Z and −Z, the method cancels out some of the random fluctuations, reducing variance.
+
+2.  **Computational Efficiency**: Two paths are generated from a single random variable Z, which improves efficiency without additional computational overhead.
+
+### 1.3.2 Code and Results
+
+This code uses **Antithetic Variates method** to estimate the price of a European put option, comparing results across different sample sizes.
+
+The results for the antithetic variates method at different sample sizes N are as follows:
+
+```{r}
+
+DiscountedPayoffAntithetic = function(optiontype) {
+S = 100
+K = 100
+T = 0.5
+r = 0.04
+q = 0.02
+vol = 0.2
+Z = rnorm(1)
+Z1 = Z
+Z2 = -Z
+
+ST1 = S * exp((r - q - 0.5 * volˆ2) * T + vol * sqrt(T) * Z1)
+ST2 = S * exp((r - q - 0.5 * volˆ2) * T + vol * sqrt(T) * Z2)
+x1 = exp(-r * T) * max(0, (K - ST1) * optiontype)
+x2 = exp(-r * T) * max(0, (K - ST2) * optiontype)
+return(0.5 * (x1 + x2))
+}
+
+BasketAntithetic = function(n, alpha, optiontype) {
+x = DiscountedPayoffAntithetic(optiontype)
+xbar = x
+ybar = xˆ2
+for (k in 2:n) {
+x = DiscountedPayoffAntithetic(optiontype)
+xbar = (1 - 1/k) * xbar + x/k
+ybar = (1 - 1/k) * ybar + xˆ2/k
+}
+se = sqrt((ybar - xbarˆ2) / (n - 1))
+zscore = qnorm(1 - alpha / 2)
+lb = xbar - zscore * se
+ub = xbar + zscore * se
+mylist = list(
+"price" = round(xbar, digits = 2),
+"se" = round(se, digits = 2),
+"lb" = round(lb, digits = 2),
+"ub" = round(ub, digits = 2)
+)
+return(mylist)
+}
+
+
+# MC
+sample_sizes = c(10, 100, 1000, 2500, 5000, 10000, 50000, 100000, 100000)
+results = data.frame(
+N = sample_sizes,
+Price = numeric(length(sample_sizes)),
+SE = numeric(length(sample_sizes)),
+LowerCI = numeric(length(sample_sizes)),
+UpperCI = numeric(length(sample_sizes)),
+AbsolutePricingError = numeric(length(sample_sizes)),
+Time = numeric(length(sample_sizes))
+)
+
+for (i in 1:length(sample_sizes)) {
+N = sample_sizes[i]
+start_time = Sys.time()
+res = MC_put_price(S, K, T, r, q, vol, N)
+end_time = Sys.time()
+results$Price[i] = res$price
+results$SE[i] = res$se
+results$LowerCI[i] = res$ci[1]
+results$UpperCI[i] = res$ci[2]
+results$AbsolutePricingError[i] = abs(res$price - exact_price)
+results$Time[i] = as.numeric(difftime(end_time, start_time, units = "secs"))
+}
+
+print(results)
+```
+
+As the sample size N increases, the Monte Carlo estimates converge to the theoretical value **5.0698**.
+
+Visualize the convergence of Monte Carlo simulation estimates for the European put option price.
+
+```{r}
+ggplot(results, aes(x = N, y = Price)) +
+geom_line() +
+geom_point() +
+geom_hline(yintercept = exact_price, linetype = "dashed", color = "pink") +
+theme_minimal() +
+labs(
+title = "Monte Carlo Estimate Convergence with Increasing Sample Size",
+x = "Sample Size",
+y = "Estimated Option Price"
+)
+```
+
+The plot shows that as the sample size increases, the Monte Carlo estimated option price converges to the exact BSM price, demonstrating the similar result from **Standard Monte Carlo Method** with shorter pricing time.
+
+## 1.4 Conclusion
+
+In this project, we implemented both the standard Monte Carlo method and the antithetic variates method to price European put options. The results show that:
+
+1\. The **Standard Method** performs well as the sample size increases.
+
+2\. The **Antithetic Variates Method**, compared to the **Standard Monte Carlo Method**, achieves the **same pricing accuracy** with **improved computational efficiency**.

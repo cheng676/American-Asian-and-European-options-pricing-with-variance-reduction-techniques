@@ -1,0 +1,255 @@
+# 3 American Put Option Pricing
+
+## 3.1 American Put Option Pricing using LSMC
+
+3.1.1 Introduction of LSMC
+
+Least-Squares Monte Carlo (LSMC) is a popular pricing method, especially for path-dependent derivatives like American options. 
+In traditional simulation methods for American option pricing, nested models are required to obtain the conditional expected payoff from continuation, which results in a large number of paths and cumbersome calculations. The LSMC method provides this expected payoff through least-squares regression on cross-sectional data. The regression not only avoids the heavy computation caused by nested models but also smooths out errors.
+
+Specific steps of LSMC are as follows:
+  1. Generate Asset Price Paths: Use Monte Carlo simulation to generate multiple asset price paths from the current time to maturity.
+  
+  2. Determine the Option Value at Maturity: Derive the option value at maturity according to the asset price and exercise price.
+  
+  3. Backward Induction: Step back from maturity to the current time. 
+  At each time step:  
+     -Calculate the exercise value of the option at the current
+     time.  
+     -Use least-squares regression to estimate the conditional 
+     expected payoff from continuation.  
+     -Compare the exercise value with the continuation value 
+     and decide whether to exercise or continue holding to 
+     retain the optimal value.  
+  
+  4. Obtain the Option Value: At the initial time, take the average of the optimal values across all paths and discount to obtain the current price of the American option.
+
+3.1.2 Implement
+
+In this section, we demonstrate how to use R to implement the pricing of american put options using the LSMC method.
+The LSMC_pricer function includes the four steps for implementing LSMC described in the previous section. It takes 8 parameters as input and outputs the price of an American put option.
+```{r}
+format_system_time <- function(expr) {
+  result <- system.time(expr)
+  cat("User time:", result["user.self"], "seconds\n")
+  cat("System time:", result["sys.self"], "seconds\n")
+  cat("Elapsed time:", result["elapsed"], "seconds\n")
+}
+```
+
+```{r}
+library(MASS)
+
+# Parameters
+S0 <- 100          # Initial stock price
+K <- 100           # Strike price
+r <- 0.04          # Risk-free interest rate
+sigma <- 0.2       # Volatility
+T <- 1/12          # Time to maturity (in years)
+M <- 10000         # Number of Monte Carlo paths
+N <- 5000          # Number of time steps
+q <- 0.02          # Dividend yield
+```
+
+```{r}
+LSMC_pricer <- function(S0, K, r, q, sigma, T, M, N, regressor_number){
+  
+  dt <- T / N        # Length of each time step
+  
+  # Simulate stock price paths
+  set.seed(1)
+  S <- matrix(0, nrow = M, ncol = N + 1)
+  S[, 1] <- S0  # Initialization
+  # Step 1: Simulation
+  for (t in 2:(N + 1)) {
+    Z <- rnorm(M)
+    S[, t] <- S[, t - 1] * exp((r-q - 0.5 * sigma^2) * dt + sigma * sqrt(dt) * Z)
+  }
+  
+  # Step 2:  Determine the Value at Maturity
+  # Initialize a matrix to store cashflows
+  cashflows <- matrix(0, nrow = M, ncol = N + 1)
+  
+  # Final cashflows at maturity
+  cashflows[, N + 1] <- pmax(K - S[, N + 1], 0)
+  
+  # Step 3: Backward Induction
+  for (t in N:1) {
+    itm <- which(S[, t] < K)  # Get indices of in-the-money paths
+    
+    if (length(itm) > 0) {  # If there are in-the-money paths
+      # Extract stock prices and discounted future cashflows
+      X <- S[itm, t]
+      Y <- cashflows[itm, t + 1] * exp(-r * dt)
+    
+      # Perform regression
+      regression <- lm(Y ~ poly(X, regressor_number))  # Use a polynomial regression
+      continuation_value <- predict(regression, newdata = data.frame(X = X))
+  
+      # Calculate immediate exercise value at time t
+      exercise_value <- pmax(0, K - X)
+  
+      # If exercise value > continuation value, exercise; otherwise, hold
+      cashflows[itm, t] <- ifelse(exercise_value > continuation_value, 
+                                  exercise_value,  # Exercise the option
+                                  cashflows[itm, t + 1] * exp(-r * dt))  # Hold the option
+      
+      # out-of-money option's value
+      all_paths <- seq_len(nrow(S))
+      non_itm <- setdiff(all_paths, itm) # remove itm, keep the rest
+      cashflows[non_itm,t] <- cashflows[non_itm,t+1]*exp(-r * dt) # won't exercise, so just discount
+    }
+  }
+  
+  # Step 4: Calculate the Initial Option Price
+  # Tip: Since when t=1, all S = S0, regression couldn't be done, so we use cashflow in t=2 to discount for option price
+  option_price <- mean(cashflows[, 2]) * exp(-r * dt)
+  return(option_price)}
+
+# Test the function
+format_system_time({option_price = LSMC_pricer(S0, K, r, q, sigma, T, M, N, 2)})
+cat("The estimated price of the American put option:", option_price)
+```
+
+In the following section, we study the impact of the number of paths M, the number of time steps N, and the number of regression variables K on the approximate option price by fixing other parameters and changing one parameter at a time.
+
+The impact of the number of regressors K
+```{r}
+regressor_numbers <- seq(2,13,1)
+option_prices <- sapply(regressor_numbers, function(regressor_number) LSMC_pricer(S0, K, r, q, sigma, T, M, N,regressor_number))
+
+# Plot the results
+plot(
+  regressor_numbers, option_prices, type = "b", col = "blue",
+  xlab = "Number of Regressors", ylab = "Option Price",
+  main = "Option Price vs Number of Regressors"
+)
+
+```
+According to the result, the approximate option prices the option price does not show a converging trend but instead maintains high volatility as the number of regression variables increases. This indicates that increasing the number of regression variables does not stabilize the approximate option price.
+
+The impact of the number of time steps N
+```{r}
+# install.packages("pbapply")
+library(pbapply)
+
+N_values <- seq(100, 10000,200)
+option_prices <- pbsapply(N_values, function(N) LSMC_pricer(S0, K, r, q, sigma, T, M, N,regressor_number=2))
+
+# Plot the results
+plot(
+  N_values, option_prices, type = "b", col = "blue",
+  xlab = "Number of Time Steps (N)", ylab = "Option Price",
+  main = "Option Price vs Number of Time Steps"
+)
+```
+According to the result, the approximate option price gradually decreases and stabilizes as the number of time steps N increases. When N is small (< 1000), the price fluctuates significantly and is unstable. As N reaches a moderate range, the option price converges to a more stable level. This means that increasing the number of time steps helps the approximate price stabilize, but an excessively large number of time steps may also disrupt this stability.
+
+The impact of the number of paths M
+```{r}
+# Range of M values
+M_values <- seq(500,15000,500)
+option_prices <- pbsapply(M_values, function(M) LSMC_pricer(S0, K, r, q, sigma, T, M, N,regressor_number=7))
+
+# Plot the results
+plot(
+  M_values, option_prices, type = "b", col = "blue",
+  xlab = "Number of Simulated Paths (M)", ylab = "Option Price",
+  main = "Option Price vs Number of Sample Size"
+)
+```
+According to the result, the approximate option price gradually stabilizes as the number of simulated paths increases. When the sample size is small, the pricing results exhibit significant fluctuations, but as the sample size becomes sufficiently large, the option price converges. This indicates that increasing the number of paths helps reduce estimation error and stabilize the approximate option price.
+
+## 3.2  American Put Option Pricing using with BBSR
+
+3.2.1 Introduction of BBSR
+
+The Binomial Black-Scholes with Richardson extrapolation (BBSR) is an advanced method to price options. It combine the binomial framework and Richardson extrapolation simultaneously to improve the accruacy.
+The BBSR first employs a binomial tree to simulate the price movement paths of the underlying asset and then works backward from the expiration date to calculate the price of the American option. At each time node, the expected future payoff is equal to the risk-neutral probability-weighted payoff at the next time point.
+Next, the BBSR method incorporates Richardson extrapolation. This mathematical technique accelerates the convergence of the binomial model's results toward the actual option price by combining estimates with different time step sizes. As a result, the BBSR method can be summarized as using two binomial trees with different time steps for pricing and then combining the two prices.
+
+3.2.2 Implement of BBSR
+
+In this section, we demonstrate how to use R to implement the pricing of american put options using the BBSR method.
+
+We first conduct the BBS function to price a option using specific parameters including the number of time steps N.
+```{r}
+# Parameters
+S0 <- 100          # Initial stock price
+K <- 100           # Strike price
+r <- 0.04          # Risk-free interest rate
+sigma <- 0.2       # Volatility
+T <- 1/12             # Time to maturity (in years)
+N <- 5000            # Number of time steps
+q <- 0.02  # Dividend yield
+
+
+BBS <- function(S0, K, T, r, q, sigma, N, option_type = "put") {
+  
+  # Calculate parameters
+  dt <- T / N                  # Time step
+  u <- exp(sigma * sqrt(dt))   # Upward factor
+  d <- 1 / u                   # Downward factor
+  p <- (exp((r-q) * dt) - d) / (u - d)  # Risk-neutral probability
+  discount <- exp(-r * dt)     # Discount factor per step
+  
+  # Initialize stock price tree
+  stock_prices <- matrix(0, nrow = N + 1, ncol = N + 1)
+  stock_prices[1, 1] <- S0
+  for (i in 2:(N + 1)) {
+    stock_prices[i, 1] <- stock_prices[i-1, 1]*u
+    for (j in 2:i) {
+      stock_prices[i, j] <- stock_prices[i-1, j-1]*d
+    }
+  }
+  
+  # Initialize option values at maturity
+  option_values <- matrix(0, nrow = N + 1, ncol = N + 1)
+  for (j in 1:(N+1)) {
+    if (option_type == "call") {
+      option_values[N + 1, j] <- pmax(0, stock_prices[N + 1, j] - K)  # Call payoff
+    } else if (option_type == "put") {
+      option_values[N + 1, j] <- pmax(0, K - stock_prices[N + 1, j])  # Put payoff
+    } }
+  
+  # Backward induction to calculate option values
+  for (t in N:1) {
+    for (i in 1:t) {
+      # Risk-neutral expected value
+      expected_value <- discount * (p * option_values[t + 1, i] + (1 - p) * option_values[t + 1, i + 1])
+      
+      # Immediate exercise value
+      if (option_type == "call") {
+        exercise_value <- pmax(0, stock_prices[t, i] - K)
+      } else {
+        exercise_value <- pmax(0, K - stock_prices[t, i])
+      }
+  
+      # American option: Take the maximum of continuation and immediate exercise
+      option_values[t, i] <- max(expected_value, exercise_value)
+    }
+  }
+  
+  # Return the option price at the root of the tree
+  return(option_values[1, 1])
+}
+```
+
+Next, we use the BBS function with time steps of 2N and N to obtain two prices, and then apply Richardson Extrapolation to combine them into the final pric, which could
+increase converge rate from O(1/N) to O(1/N^2) and lead to better accuracy.
+```{r}
+BBSR <- function(S0, K, T, r, q, sigma, N){
+  opt_price = 2*BBS(S0, K, T, r, q, sigma, 2*N) - BBS(S0, K, T, r, q, sigma, N)
+  return(opt_price)
+}
+
+format_system_time({
+  C = BBSR(S0, K, T, r, q, sigma, N)
+})
+print(C)
+```
+As the result, the option price derived from BBSR is 2.225905, which is aligned with the results of LSMC in the previous parts, since their values are very close.
+
+## 3.3 Conclusion of section 3
+
+In this section, we developed LSMC method and BBSR method for american put option pricing. We examined the impact of different parameters on the approximate price. The results show that increasing the number of simulation paths and the number of time steps helps the approximate price converge, while increasing the number of regressors does not. Finally, we implemented the BBSR method to obtain accurate pricing results, which align with the results of LSMC. This further demonstrates that increasing the number of simulation paths and the number of time steps can improve pricing accuracy.
